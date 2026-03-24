@@ -1,0 +1,110 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    // Collection: users
+    // Fields: uid, fullName, email, role, supervisorId, leaveBalance, status
+    //
+    // Collection: leave_requests
+    // Fields: applicantId, leaveType, startDate, endDate, totalDays, status, currentApproverId
+    //
+    // Collection: leave_types
+    // Fields: name, maxDays, requiresAttachment
+    //
+    // Collection: audit_logs
+    // Fields: timestamp, actorId, action, details
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isRole(role) {
+      return isAuthenticated() && getUserData().role == role;
+    }
+
+    function isAdmin() {
+      return isRole('admin') || (request.auth.token.email == "atindaeugene@gmail.com" && request.auth.token.email_verified == true);
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // Validation Functions
+    function isValidUser(data) {
+      return data.fullName is string && data.fullName.size() > 0 &&
+             data.email is string && data.email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$") &&
+             data.role in ['staff', 'manager', 'hr', 'admin', 'ceo'];
+    }
+
+    function isValidLeaveRequest(data) {
+      return data.applicantId is string &&
+             data.leaveType is string &&
+             data.totalDays is number && data.totalDays > 0 &&
+             data.status in ['pending_supervisor', 'pending_hr', 'pending_ceo', 'approved', 'rejected', 'clarification', 'cancelled'];
+    }
+
+    // Rules
+    match /users/{uid} {
+      allow read: if isAuthenticated() && (isOwner(uid) || isRole('hr') || isAdmin());
+      allow create: if (isAuthenticated() && isOwner(uid) && request.resource.data.role == 'staff') || isAdmin();
+      allow update: if isAdmin() || (isOwner(uid) && hasOnlyAllowedFields(['fullName', 'email']));
+    }
+
+    match /system_config/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || isRole('hr');
+    }
+
+    match /leave_requests/{requestId} {
+      allow read: if isAuthenticated() && (
+        request.auth.uid == resource.data.applicantId ||
+        request.auth.uid == resource.data.currentApproverId ||
+        isRole('hr') || isRole('admin') || isRole('ceo') ||
+        getUserData().uid == resource.data.supervisorId // If manager is supervisor
+      );
+      allow create: if isAuthenticated() && isValidLeaveRequest(request.resource.data) && request.resource.data.applicantId == request.auth.uid;
+      allow update: if isAuthenticated() && (
+        (request.auth.uid == resource.data.applicantId && resource.data.status in ['pending_supervisor', 'clarification']) ||
+        (request.auth.uid == resource.data.currentApproverId) ||
+        isRole('hr') || isRole('ceo') || isAdmin()
+      );
+    }
+
+    match /leave_types/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || isRole('hr');
+    }
+
+    match /departments/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /holidays/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || isRole('hr');
+    }
+
+    match /audit_logs/{id} {
+      allow read: if isAdmin() || isRole('hr');
+      allow create: if isAuthenticated();
+    }
+    
+    match /test/{id} {
+      allow read: if true;
+    }
+  }
+}

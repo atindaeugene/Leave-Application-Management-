@@ -1,0 +1,116 @@
+{
+  "entities": {
+    "users": {
+      "title": "User",
+      "description": "System users including staff, managers, HR, and admins.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "fullName": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "employeeNumber": { "type": "string" },
+        "department": { "type": "string" },
+        "role": { "type": "string", "enum": ["staff", "manager", "hr", "admin", "ceo"] },
+        "supervisorId": { "type": "string" },
+        "leaveBalance": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "fullName", "email", "role", "status"]
+    },
+    "departments": {
+      "title": "Department",
+      "description": "Organizational departments.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "headId": { "type": "string" }
+      },
+      "required": ["name"]
+    },
+    "leave_requests": {
+      "title": "Leave Request",
+      "description": "Applications for leave submitted by staff.",
+      "type": "object",
+      "properties": {
+        "requestId": { "type": "string" },
+        "applicantId": { "type": "string" },
+        "applicantName": { "type": "string" },
+        "department": { "type": "string" },
+        "leaveType": { "type": "string" },
+        "startDate": { "type": "string", "format": "date-time" },
+        "endDate": { "type": "string", "format": "date-time" },
+        "totalDays": { "type": "number" },
+        "reason": { "type": "string" },
+        "attachmentUrl": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending_supervisor", "pending_hr", "pending_ceo", "approved", "rejected", "clarification", "cancelled"] },
+        "currentApproverId": { "type": "string" },
+        "supervisorDecision": { "type": "object" },
+        "hrDecision": { "type": "object" },
+        "ceoDecision": { "type": "object" },
+        "comments": { "type": "array", "items": { "type": "object" } },
+        "submittedAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["applicantId", "leaveType", "startDate", "endDate", "totalDays", "status"]
+    },
+    "leave_types": {
+      "title": "Leave Type",
+      "description": "Configurable leave categories and their limits.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "maxDays": { "type": "number" },
+        "requiresAttachment": { "type": "boolean" },
+        "requiresEscalation": { "type": "boolean" }
+      },
+      "required": ["name", "maxDays"]
+    },
+    "holidays": {
+      "title": "Holiday",
+      "description": "Public holidays to exclude from leave calculations.",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "format": "date" },
+        "name": { "type": "string" }
+      },
+      "required": ["date", "name"]
+    },
+    "audit_logs": {
+      "title": "Audit Log",
+      "description": "Record of all sensitive system actions.",
+      "type": "object",
+      "properties": {
+        "timestamp": { "type": "string", "format": "date-time" },
+        "actorId": { "type": "string" },
+        "actorName": { "type": "string" },
+        "action": { "type": "string" },
+        "details": { "type": "string" },
+        "targetId": { "type": "string" }
+      },
+      "required": ["timestamp", "actorId", "action"]
+    },
+    "system_config": {
+      "title": "System Configuration",
+      "description": "Global system settings for leave policies.",
+      "type": "object",
+      "properties": {
+        "maxCarryForwardDays": { "type": "number" },
+        "carryForwardExpiryDate": { "type": "string", "format": "date" },
+        "enableCarryForward": { "type": "boolean" }
+      },
+      "required": ["enableCarryForward"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": { "schema": "users", "description": "User profiles" },
+    "/departments/{id}": { "schema": "departments", "description": "Departments" },
+    "/leave_requests/{requestId}": { "schema": "leave_requests", "description": "Leave applications" },
+    "/leave_types/{id}": { "schema": "leave_types", "description": "Leave policies" },
+    "/holidays/{id}": { "schema": "holidays", "description": "Public holidays" },
+    "/audit_logs/{id}": { "schema": "audit_logs", "description": "System audit trail" },
+    "/system_config/global": { "schema": "system_config", "description": "Global settings" }
+  }
+}
