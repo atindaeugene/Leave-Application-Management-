@@ -11,7 +11,7 @@ import { formatDate, formatDateTime } from '../lib/utils';
 import { sendNotification, sendSMSNotification, sendApprovalEmailWithPDF } from '../lib/notifications';
 
 const Approvals: React.FC = () => {
-  const { profile, isManager, isHR, isCEO } = useAuth();
+  const { profile, isManager, isHR, isCEO, isAdmin } = useAuth();
   const [requests, setRequests] = useState<LeaveRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedRequest, setSelectedRequest] = useState<LeaveRequest | null>(null);
@@ -20,20 +20,48 @@ const Approvals: React.FC = () => {
   useEffect(() => {
     if (!profile) return;
 
-    const q = query(
-      collection(db, 'leave_requests'),
-      where('currentApproverId', '==', profile.uid),
-      where('status', 'in', ['pending_supervisor', 'pending_hr', 'pending_ceo']),
-      orderBy('submittedAt', 'desc')
-    );
+    let q;
+    if (isAdmin) {
+      // Admin sees all pending requests
+      q = query(
+        collection(db, 'leave_requests'),
+        where('status', 'in', ['pending_supervisor', 'pending_hr', 'pending_ceo']),
+        orderBy('submittedAt', 'desc')
+      );
+    } else if (isHR) {
+      // HR sees all requests pending HR approval
+      q = query(
+        collection(db, 'leave_requests'),
+        where('status', '==', 'pending_hr'),
+        orderBy('submittedAt', 'desc')
+      );
+    } else if (isCEO) {
+      // CEO sees all requests pending CEO approval
+      q = query(
+        collection(db, 'leave_requests'),
+        where('status', '==', 'pending_ceo'),
+        orderBy('submittedAt', 'desc')
+      );
+    } else {
+      // Supervisors see requests where they are the current approver
+      q = query(
+        collection(db, 'leave_requests'),
+        where('currentApproverId', '==', profile.uid),
+        where('status', 'in', ['pending_supervisor', 'pending_hr', 'pending_ceo']),
+        orderBy('submittedAt', 'desc')
+      );
+    }
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       setRequests(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as LeaveRequest)));
       setLoading(false);
+    }, (error) => {
+      console.error("Error fetching approvals:", error);
+      setLoading(false);
     });
 
     return () => unsubscribe();
-  }, [profile]);
+  }, [profile, isHR, isCEO, isAdmin]);
 
   const handleAction = async (requestId: string, action: 'approve' | 'reject' | 'clarification') => {
     if (!profile || !comment && action !== 'approve') {
@@ -51,9 +79,19 @@ const Approvals: React.FC = () => {
       if (action === 'approve') {
         if (request.status === 'pending_supervisor') {
           nextStatus = 'pending_hr';
-          // In a real app, we'd fetch the HR officer's ID or a group ID
-          nextApproverId = 'hr_officer_id'; 
+          nextApproverId = 'hr_officer_id'; // Placeholder for HR role
         } else if (request.status === 'pending_hr') {
+          if (request.requiresEscalation) {
+            nextStatus = 'pending_ceo';
+            nextApproverId = 'ceo_id'; // Placeholder for CEO role
+          } else {
+            nextStatus = 'approved';
+            // Deduct leave balance
+            await updateDoc(doc(db, 'users', request.applicantId), {
+              leaveBalance: increment(-request.totalDays)
+            });
+          }
+        } else if (request.status === 'pending_ceo') {
           nextStatus = 'approved';
           // Deduct leave balance
           await updateDoc(doc(db, 'users', request.applicantId), {

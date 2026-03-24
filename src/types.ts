@@ -31,6 +31,7 @@ export interface LeaveRequest {
   applicantPhoneNumber?: string;
   department: string;
   leaveType: string;
+  requiresEscalation?: boolean;
   startDate: string;
   endDate: string;
   totalDays: number;

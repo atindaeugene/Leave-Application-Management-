@@ -10,7 +10,7 @@ import { formatDate, cn } from '../lib/utils';
 import { toast } from 'sonner';
 
 const Dashboard: React.FC = () => {
-  const { profile, isManager, isHR, isCEO } = useAuth();
+  const { profile, isManager, isHR, isCEO, isAdmin } = useAuth();
   const [recentRequests, setRecentRequests] = useState<LeaveRequest[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<LeaveRequest[]>([]);
   const [loading, setLoading] = useState(true);
@@ -56,19 +56,46 @@ const Dashboard: React.FC = () => {
       setLoading(false);
     });
 
-    // If manager/HR/CEO, fetch pending approvals
+    // If manager/HR/CEO/Admin, fetch pending approvals
     let unsubscribePending = () => {};
-    if (isManager || isHR || isCEO) {
-      const pendingQ = query(
-        collection(db, 'leave_requests'),
-        where('currentApproverId', '==', profile.uid),
-        where('status', 'in', ['pending_supervisor', 'pending_hr', 'pending_ceo']),
-        orderBy('submittedAt', 'desc')
-      );
+    if (isManager || isHR || isCEO || isAdmin) {
+      let pendingQ;
+      if (isAdmin) {
+        pendingQ = query(
+          collection(db, 'leave_requests'),
+          where('status', 'in', ['pending_supervisor', 'pending_hr', 'pending_ceo']),
+          orderBy('submittedAt', 'desc'),
+          limit(5)
+        );
+      } else if (isHR) {
+        pendingQ = query(
+          collection(db, 'leave_requests'),
+          where('status', '==', 'pending_hr'),
+          orderBy('submittedAt', 'desc'),
+          limit(5)
+        );
+      } else if (isCEO) {
+        pendingQ = query(
+          collection(db, 'leave_requests'),
+          where('status', '==', 'pending_ceo'),
+          orderBy('submittedAt', 'desc'),
+          limit(5)
+        );
+      } else {
+        pendingQ = query(
+          collection(db, 'leave_requests'),
+          where('currentApproverId', '==', profile.uid),
+          where('status', 'in', ['pending_supervisor', 'pending_hr', 'pending_ceo']),
+          orderBy('submittedAt', 'desc'),
+          limit(5)
+        );
+      }
 
       unsubscribePending = onSnapshot(pendingQ, (snapshot) => {
         const requests = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as LeaveRequest));
         setPendingApprovals(requests);
+      }, (error) => {
+        console.error("Error fetching dashboard approvals:", error);
       });
     }
 
@@ -76,7 +103,7 @@ const Dashboard: React.FC = () => {
       unsubscribeRecent();
       unsubscribePending();
     };
-  }, [profile, isManager, isHR, isCEO]);
+  }, [profile, isManager, isHR, isCEO, isAdmin]);
 
   const stats = [
     { label: 'Leave Balance', value: `${profile?.leaveBalance || 0} Days`, icon: Calendar, color: 'text-blue-600', bg: 'bg-blue-50' },
@@ -137,8 +164,8 @@ const Dashboard: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* Pending Approvals (Only for Managers/HR) */}
-        {(isManager || isHR || isCEO) && (
+        {/* Pending Approvals (Only for Managers/HR/CEO/Admin) */}
+        {(isManager || isHR || isCEO || isAdmin) && (
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
             <div className="p-6 border-b border-gray-100 flex items-center justify-between">
               <h3 className="font-bold text-gray-900 flex items-center gap-2">

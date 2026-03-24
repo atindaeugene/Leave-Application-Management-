@@ -70,6 +70,7 @@ const ApplyLeave: React.FC = () => {
         department: profile.department,
         supervisorId: profile.supervisorId || '',
         leaveType: selectedType?.name || formData.leaveType,
+        requiresEscalation: selectedType?.requiresEscalation || false,
         startDate: formData.startDate,
         endDate: formData.endDate,
         totalDays,
