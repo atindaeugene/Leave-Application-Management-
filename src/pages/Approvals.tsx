@@ -8,7 +8,7 @@ import { LeaveRequest } from '../types';
 import StatusBadge from '../components/StatusBadge';
 import { formatDate, formatDateTime } from '../lib/utils';
 
-import { sendNotification, sendSMSNotification } from '../lib/notifications';
+import { sendNotification, sendSMSNotification, sendApprovalEmailWithPDF } from '../lib/notifications';
 
 const Approvals: React.FC = () => {
   const { profile, isManager, isHR, isCEO } = useAuth();
@@ -78,30 +78,35 @@ const Approvals: React.FC = () => {
         }]
       });
 
-      // Notify Applicant
-      if (request.applicantEmail) {
-        let subject = `Leave Request Update: ${action.toUpperCase()}`;
-        let body = `Hello ${request.applicantName},\n\nYour ${request.leaveType} request for ${request.totalDays} days (${request.startDate} to ${request.endDate}) has been ${action}d by ${profile.fullName}.\n\nStatus: ${nextStatus.replace('_', ' ').toUpperCase()}`;
-        
-        if (comment) {
-          body += `\n\nComment: ${comment}`;
-        }
-        
-        // Send Email
-        await sendNotification({
-          to: request.applicantEmail,
-          subject,
-          body
-        });
+        // Notify Applicant
+        if (request.applicantEmail) {
+          if (nextStatus === 'approved') {
+            // Send Approval Email with PDF
+            await sendApprovalEmailWithPDF(request.applicantEmail, request, profile.fullName);
+          } else {
+            // Standard notification for other status changes
+            let subject = `Leave Request Update: ${action.toUpperCase()}`;
+            let body = `Hello ${request.applicantName},\n\nYour ${request.leaveType} request for ${request.totalDays} days (${request.startDate} to ${request.endDate}) has been ${action}d by ${profile.fullName}.\n\nStatus: ${nextStatus.replace('_', ' ').toUpperCase()}`;
+            
+            if (comment) {
+              body += `\n\nComment: ${comment}`;
+            }
+            
+            await sendNotification({
+              to: request.applicantEmail,
+              subject,
+              body
+            });
+          }
 
-        // Send SMS
-        if (request.applicantPhoneNumber) {
-          await sendSMSNotification({
-            to: request.applicantPhoneNumber,
-            body: `Devco LMS: Your ${request.leaveType} request has been ${action}d. Status: ${nextStatus.replace('_', ' ').toUpperCase()}`
-          });
+          // Send SMS
+          if (request.applicantPhoneNumber) {
+            await sendSMSNotification({
+              to: request.applicantPhoneNumber,
+              body: `Devco LMS: Your ${request.leaveType} request has been ${action}d. Status: ${nextStatus.replace('_', ' ').toUpperCase()}`
+            });
+          }
         }
-      }
 
       toast.success(`Request ${action}d successfully.`);
       setSelectedRequest(null);

@@ -51,3 +51,24 @@ export const sendSMSNotification = async (notification: SMSNotification) => {
     return { success: false, error };
   }
 };
+
+export const sendApprovalEmailWithPDF = async (to: string, requestData: any, approverName: string) => {
+  try {
+    const response = await fetch('/api/notify/approval-pdf', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ to, requestData, approverName }),
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to send approval email with PDF');
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Approval PDF Email error:', error);
+    return { success: false, error };
+  }
+};

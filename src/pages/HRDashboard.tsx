@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { collection, query, where, onSnapshot, getDocs } from 'firebase/firestore';
+import React, { useEffect, useState, useMemo } from 'react';
+import { collection, query, where, onSnapshot, getDocs, orderBy, limit } from 'firebase/firestore';
 import { 
   Users, 
   Calendar, 
@@ -10,14 +10,34 @@ import {
   ArrowRight,
   Download,
   Info,
-  CheckSquare
+  CheckSquare,
+  BarChart3,
+  PieChart as PieChartIcon,
+  Activity
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { 
+  BarChart, 
+  Bar, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  ResponsiveContainer, 
+  PieChart, 
+  Pie, 
+  Cell, 
+  LineChart, 
+  Line,
+  Legend
+} from 'recharts';
 import { db } from '../firebase';
 import { useAuth } from '../AuthContext';
 import { LeaveRequest, LeaveType, UserProfile } from '../types';
 import StatusBadge from '../components/StatusBadge';
 import { formatDate, cn } from '../lib/utils';
+
+const COLORS = ['#8B0000', '#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d'];
 
 const HRDashboard: React.FC = () => {
   const { isHR, isAdmin } = useAuth();
@@ -29,17 +49,21 @@ const HRDashboard: React.FC = () => {
   });
   const [pendingRequests, setPendingRequests] = useState<LeaveRequest[]>([]);
   const [leaveTypes, setLeaveTypes] = useState<LeaveType[]>([]);
+  const [allApprovedRequests, setAllApprovedRequests] = useState<LeaveRequest[]>([]);
+  const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!isHR && !isAdmin) return;
 
-    // 1. Fetch Metrics
-    const fetchMetrics = async () => {
+    // 1. Fetch Metrics & Data for Charts
+    const fetchData = async () => {
       try {
         // Total Employees
         const usersSnap = await getDocs(collection(db, 'users'));
-        const totalEmployees = usersSnap.size;
+        const users = usersSnap.docs.map(doc => ({ uid: doc.id, ...doc.data() } as UserProfile));
+        setAllUsers(users);
+        const totalEmployees = users.length;
 
         // Pending HR Approvals
         const pendingHRQuery = query(
@@ -49,15 +73,18 @@ const HRDashboard: React.FC = () => {
         const pendingHRSnap = await getDocs(pendingHRQuery);
         const pendingHR = pendingHRSnap.size;
 
-        // On Leave Today (Simple check: status is approved and today is between start and end)
-        const today = new Date().toISOString().split('T')[0];
+        // All Approved Requests for trends and distribution
         const approvedQuery = query(
           collection(db, 'leave_requests'),
           where('status', '==', 'approved')
         );
         const approvedSnap = await getDocs(approvedQuery);
-        const onLeaveToday = approvedSnap.docs.filter(doc => {
-          const data = doc.data() as LeaveRequest;
+        const approvedRequests = approvedSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as LeaveRequest));
+        setAllApprovedRequests(approvedRequests);
+
+        // On Leave Today
+        const today = new Date().toISOString().split('T')[0];
+        const onLeaveToday = approvedRequests.filter(data => {
           return today >= data.startDate && today <= data.endDate;
         }).length;
 
@@ -83,12 +110,14 @@ const HRDashboard: React.FC = () => {
       }
     };
 
-    fetchMetrics();
+    fetchData();
 
     // 2. Listen for Pending HR Requests
     const pendingQ = query(
       collection(db, 'leave_requests'),
-      where('status', '==', 'pending_hr')
+      where('status', '==', 'pending_hr'),
+      orderBy('submittedAt', 'desc'),
+      limit(10)
     );
     const unsubscribePending = onSnapshot(pendingQ, (snapshot) => {
       const requests = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as LeaveRequest));
@@ -107,6 +136,59 @@ const HRDashboard: React.FC = () => {
       unsubscribeTypes();
     };
   }, [isHR, isAdmin]);
+
+  // Process Data for Charts
+  const departmentData = useMemo(() => {
+    const deptCounts: Record<string, number> = {};
+    allApprovedRequests.forEach(req => {
+      const dept = req.department || 'Unknown';
+      deptCounts[dept] = (deptCounts[dept] || 0) + 1;
+    });
+    return Object.entries(deptCounts).map(([name, value]) => ({ name, value }));
+  }, [allApprovedRequests]);
+
+  const leaveTypeData = useMemo(() => {
+    const typeCounts: Record<string, number> = {};
+    allApprovedRequests.forEach(req => {
+      typeCounts[req.leaveType] = (typeCounts[req.leaveType] || 0) + 1;
+    });
+    return Object.entries(typeCounts).map(([name, value]) => ({ name, value }));
+  }, [allApprovedRequests]);
+
+  const trendData = useMemo(() => {
+    const last6Months = Array.from({ length: 6 }, (_, i) => {
+      const d = new Date();
+      d.setMonth(d.getMonth() - i);
+      return d.toLocaleString('default', { month: 'short' });
+    }).reverse();
+
+    const monthCounts: Record<string, number> = {};
+    allApprovedRequests.forEach(req => {
+      const date = new Date(req.submittedAt);
+      const month = date.toLocaleString('default', { month: 'short' });
+      if (last6Months.includes(month)) {
+        monthCounts[month] = (monthCounts[month] || 0) + 1;
+      }
+    });
+
+    return last6Months.map(month => ({
+      name: month,
+      requests: monthCounts[month] || 0
+    }));
+  }, [allApprovedRequests]);
+
+  const absenteeismData = useMemo(() => {
+    const employeeAbsence: Record<string, { name: string, days: number }> = {};
+    allApprovedRequests.forEach(req => {
+      if (!employeeAbsence[req.applicantId]) {
+        employeeAbsence[req.applicantId] = { name: req.applicantName, days: 0 };
+      }
+      employeeAbsence[req.applicantId].days += req.totalDays;
+    });
+    return Object.values(employeeAbsence)
+      .sort((a, b) => b.days - a.days)
+      .slice(0, 5);
+  }, [allApprovedRequests]);
 
   const stats = [
     { label: 'Total Employees', value: metrics.totalEmployees, icon: Users, color: 'text-blue-600', bg: 'bg-blue-50' },
@@ -163,119 +245,149 @@ const HRDashboard: React.FC = () => {
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Pending Actions */}
-        <div className="lg:col-span-2 space-y-6">
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-            <div className="p-6 border-b border-gray-100 flex items-center justify-between">
-              <h3 className="font-bold text-gray-900 flex items-center gap-2">
-                <Clock size={20} className="text-[#8B0000]" />
-                Pending HR Approvals
-              </h3>
-              <Link to="/approvals" className="text-sm text-[#8B0000] font-medium hover:underline flex items-center gap-1">
-                View All <ArrowRight size={14} />
-              </Link>
-            </div>
-            <div className="divide-y divide-gray-100">
-              {pendingRequests.length > 0 ? (
-                pendingRequests.slice(0, 5).map((request) => (
-                  <div key={request.id} className="p-4 hover:bg-gray-50 transition-colors">
-                    <div className="flex justify-between items-start mb-1">
-                      <div>
-                        <p className="font-semibold text-gray-900">{request.applicantName}</p>
-                        <p className="text-xs text-gray-500">{request.department}</p>
-                      </div>
-                      <StatusBadge status={request.status} />
-                    </div>
-                    <div className="mt-2 flex items-center justify-between text-sm">
-                      <span className="text-gray-600">{request.leaveType} • {request.totalDays} Days</span>
-                      <span className="text-gray-400">{formatDate(request.startDate)} - {formatDate(request.endDate)}</span>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div className="p-12 text-center text-gray-500">
-                  <Clock size={40} className="mx-auto text-gray-200 mb-3" />
-                  <p>No leave requests pending HR approval.</p>
-                </div>
-              )}
-            </div>
+      {/* Visualizations Section */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        {/* Leave Trends */}
+        <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="font-bold text-gray-900 flex items-center gap-2">
+              <Activity size={20} className="text-[#8B0000]" />
+              Leave Trends (Last 6 Months)
+            </h3>
           </div>
-
-          {/* Quick Access Reports */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm hover:border-[#8B0000]/30 transition-colors cursor-pointer group">
-              <div className="flex items-start justify-between mb-4">
-                <div className="p-3 bg-blue-50 rounded-lg group-hover:bg-blue-100 transition-colors">
-                  <FileText className="text-blue-600" size={24} />
-                </div>
-                <ArrowRight size={18} className="text-gray-300 group-hover:text-[#8B0000] transition-colors" />
-              </div>
-              <h4 className="font-bold text-gray-900 mb-1">Leave Balances Report</h4>
-              <p className="text-sm text-gray-500">View current leave balances for all employees across departments.</p>
-            </div>
-            <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm hover:border-[#8B0000]/30 transition-colors cursor-pointer group">
-              <div className="flex items-start justify-between mb-4">
-                <div className="p-3 bg-green-50 rounded-lg group-hover:bg-green-100 transition-colors">
-                  <Users className="text-green-600" size={24} />
-                </div>
-                <ArrowRight size={18} className="text-gray-300 group-hover:text-[#8B0000] transition-colors" />
-              </div>
-              <h4 className="font-bold text-gray-900 mb-1">Employee Attendance</h4>
-              <p className="text-sm text-gray-500">Track daily attendance and identify patterns of absenteeism.</p>
-            </div>
+          <div className="h-[300px] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={trendData}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#666' }} />
+                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#666' }} />
+                <Tooltip 
+                  contentStyle={{ backgroundColor: '#fff', borderRadius: '8px', border: '1px solid #eee', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                />
+                <Line type="monotone" dataKey="requests" stroke="#8B0000" strokeWidth={3} dot={{ r: 4, fill: '#8B0000' }} activeDot={{ r: 6 }} />
+              </LineChart>
+            </ResponsiveContainer>
           </div>
         </div>
 
-        {/* Leave Policy Overview */}
-        <div className="space-y-6">
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-            <div className="p-6 border-b border-gray-100 flex items-center gap-2">
-              <Info size={20} className="text-[#8B0000]" />
-              <h3 className="font-bold text-gray-900">Leave Policy Overview</h3>
-            </div>
-            <div className="p-6 space-y-4">
-              {leaveTypes.map((type) => (
-                <div key={type.id} className="flex items-start gap-3 p-3 rounded-lg bg-gray-50 border border-gray-100">
-                  <div className="mt-1 w-2 h-2 rounded-full bg-[#8B0000] shrink-0" />
+        {/* Department Distribution */}
+        <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="font-bold text-gray-900 flex items-center gap-2">
+              <PieChartIcon size={20} className="text-[#8B0000]" />
+              Department-wise Distribution
+            </h3>
+          </div>
+          <div className="h-[300px] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={departmentData}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={60}
+                  outerRadius={80}
+                  paddingAngle={5}
+                  dataKey="value"
+                >
+                  {departmentData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip />
+                <Legend verticalAlign="bottom" height={36}/>
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        {/* Leave Type Breakdown */}
+        <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="font-bold text-gray-900 flex items-center gap-2">
+              <BarChart3 size={20} className="text-[#8B0000]" />
+              Leave Type Breakdown
+            </h3>
+          </div>
+          <div className="h-[300px] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={leaveTypeData} layout="vertical">
+                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f0f0f0" />
+                <XAxis type="number" hide />
+                <YAxis dataKey="name" type="category" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#666' }} width={100} />
+                <Tooltip cursor={{ fill: 'transparent' }} />
+                <Bar dataKey="value" fill="#8B0000" radius={[0, 4, 4, 0]} barSize={20} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        {/* Top Absent Employees */}
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="p-6 border-b border-gray-100 flex items-center gap-2">
+            <Users size={20} className="text-[#8B0000]" />
+            <h3 className="font-bold text-gray-900">Top Absent Employees</h3>
+          </div>
+          <div className="p-4 space-y-4">
+            {absenteeismData.length > 0 ? absenteeismData.map((emp, i) => (
+              <div key={i} className="flex items-center justify-between p-3 rounded-lg bg-gray-50 border border-gray-100">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-full bg-[#8B0000]/10 flex items-center justify-center text-[#8B0000] font-bold text-xs">
+                    {emp.name.charAt(0)}
+                  </div>
                   <div>
-                    <p className="font-semibold text-gray-900 text-sm">{type.name}</p>
-                    <div className="mt-1 flex flex-wrap gap-2">
-                      <span className="text-[10px] px-1.5 py-0.5 bg-white border border-gray-200 rounded text-gray-600">
-                        Max: {type.maxDays} Days
-                      </span>
-                      {type.requiresAttachment && (
-                        <span className="text-[10px] px-1.5 py-0.5 bg-blue-50 border border-blue-100 rounded text-blue-600">
-                          Attachment Required
-                        </span>
-                      )}
-                      {type.requiresEscalation && (
-                        <span className="text-[10px] px-1.5 py-0.5 bg-orange-50 border border-orange-100 rounded text-orange-600">
-                          CEO Approval
-                        </span>
-                      )}
-                    </div>
+                    <p className="text-sm font-semibold text-gray-900">{emp.name}</p>
+                    <p className="text-[10px] text-gray-500 uppercase font-bold">Total Approved Days</p>
                   </div>
                 </div>
-              ))}
-            </div>
-            <div className="p-4 bg-gray-50 border-t border-gray-100">
-              <Link to="/admin/settings" className="text-xs text-[#8B0000] font-semibold hover:underline flex items-center justify-center gap-1">
-                Manage Policies <ArrowRight size={12} />
-              </Link>
-            </div>
+                <div className="text-right">
+                  <p className="text-lg font-bold text-[#8B0000]">{emp.days}</p>
+                  <p className="text-[10px] text-gray-400">Days</p>
+                </div>
+              </div>
+            )) : (
+              <div className="py-8 text-center text-gray-400 text-sm">
+                No approved leave data available.
+              </div>
+            )}
           </div>
+        </div>
 
-          {/* HR Tips/Notices */}
-          <div className="bg-[#8B0000] rounded-xl p-6 text-white">
-            <h4 className="font-bold mb-2 flex items-center gap-2">
-              <AlertCircle size={18} />
-              HR Notice
-            </h4>
-            <p className="text-sm text-white/80 leading-relaxed">
-              Ensure all leave requests are reviewed within 48 hours to maintain operational efficiency. 
-              Check for supporting documents on medical and maternity leave requests.
-            </p>
+        {/* Pending Actions */}
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="p-6 border-b border-gray-100 flex items-center justify-between">
+            <h3 className="font-bold text-gray-900 flex items-center gap-2">
+              <Clock size={20} className="text-[#8B0000]" />
+              Recent Pending
+            </h3>
+            <Link to="/approvals" className="text-xs text-[#8B0000] font-medium hover:underline">
+              View All
+            </Link>
+          </div>
+          <div className="divide-y divide-gray-100">
+            {pendingRequests.length > 0 ? (
+              pendingRequests.slice(0, 4).map((request) => (
+                <div key={request.id} className="p-4 hover:bg-gray-50 transition-colors">
+                  <div className="flex justify-between items-start mb-1">
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">{request.applicantName}</p>
+                      <p className="text-[10px] text-gray-500">{request.department}</p>
+                    </div>
+                    <StatusBadge status={request.status} />
+                  </div>
+                  <div className="mt-1 flex items-center justify-between text-[11px]">
+                    <span className="text-gray-600 font-medium">{request.leaveType}</span>
+                    <span className="text-gray-400">{formatDate(request.startDate)}</span>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="p-8 text-center text-gray-500 text-sm">
+                No pending requests.
+              </div>
+            )}
           </div>
         </div>
       </div>

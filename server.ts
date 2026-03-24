@@ -4,6 +4,8 @@ import path from "path";
 import nodemailer from "nodemailer";
 import twilio from "twilio";
 import dotenv from "dotenv";
+import PDFDocument from "pdfkit";
+import { Readable } from "stream";
 
 dotenv.config();
 
@@ -69,6 +71,88 @@ async function startServer() {
     } catch (error) {
       console.error("Email error:", error);
       res.status(500).json({ error: "Failed to send email" });
+    }
+  });
+
+  // API route for sending approval email with PDF attachment
+  app.post("/api/notify/approval-pdf", async (req, res) => {
+    const { to, requestData, approverName } = req.body;
+
+    if (!to || !requestData || !approverName) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    try {
+      // Generate PDF
+      const doc = new PDFDocument();
+      const chunks: any[] = [];
+      doc.on("data", (chunk) => chunks.push(chunk));
+      
+      const pdfPromise = new Promise<Buffer>((resolve) => {
+        doc.on("end", () => resolve(Buffer.concat(chunks)));
+      });
+
+      // PDF Content
+      doc.fontSize(20).fillColor("#8B0000").text("Leave Approval Certificate", { align: "center" });
+      doc.moveDown();
+      doc.fontSize(12).fillColor("#000000").text(`Certificate ID: ${requestData.id.substring(0, 8).toUpperCase()}`);
+      doc.text(`Date Issued: ${new Date().toLocaleString()}`);
+      doc.moveDown();
+      doc.rect(50, doc.y, 500, 2).fill("#8B0000");
+      doc.moveDown(2);
+
+      doc.fontSize(14).text("Employee Details", { underline: true });
+      doc.fontSize(12).text(`Name: ${requestData.applicantName}`);
+      doc.text(`Department: ${requestData.department}`);
+      doc.text(`Email: ${requestData.applicantEmail}`);
+      doc.moveDown();
+
+      doc.fontSize(14).text("Leave Details", { underline: true });
+      doc.fontSize(12).text(`Leave Type: ${requestData.leaveType}`);
+      doc.text(`Start Date: ${requestData.startDate}`);
+      doc.text(`End Date: ${requestData.endDate}`);
+      doc.text(`Total Days: ${requestData.totalDays}`);
+      doc.moveDown();
+
+      doc.fontSize(14).text("Approval Information", { underline: true });
+      doc.fontSize(12).text(`Status: APPROVED`);
+      doc.text(`Approved By: ${approverName}`);
+      doc.text(`Approval Timestamp: ${new Date().toISOString()}`);
+      doc.moveDown(2);
+
+      doc.fontSize(10).fillColor("#666666").text("This is an electronically generated document. No physical signature is required.", { align: "center" });
+      
+      doc.end();
+
+      const pdfBuffer = await pdfPromise;
+
+      // If no SMTP credentials, log to console for demo
+      if (!process.env.SMTP_HOST) {
+        console.log("--- APPROVAL EMAIL WITH PDF (DEMO) ---");
+        console.log(`To: ${to}`);
+        console.log(`Subject: Leave Approved - ${requestData.leaveType}`);
+        console.log(`PDF generated (${pdfBuffer.length} bytes)`);
+        console.log("---------------------------------------");
+        return res.json({ success: true, message: "Email logged to console (no SMTP configured)" });
+      }
+
+      await transporter.sendMail({
+        from: `"Devco Sacco LMS" <${process.env.SMTP_FROM || "noreply@devcosacco.com"}>`,
+        to,
+        subject: `Leave Approved - ${requestData.leaveType}`,
+        text: `Hello ${requestData.applicantName},\n\nYour leave request has been fully approved. Please find the attached approval certificate for your records.\n\nApproved By: ${approverName}\nTimestamp: ${new Date().toLocaleString()}`,
+        attachments: [
+          {
+            filename: `Leave_Approval_${requestData.id.substring(0, 8)}.pdf`,
+            content: pdfBuffer,
+          },
+        ],
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("PDF/Email error:", error);
+      res.status(500).json({ error: "Failed to generate PDF or send email" });
     }
   });
 
